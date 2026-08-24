@@ -75,25 +75,28 @@ lookup.
 
 | case | mojo-mpmath | mpmath | relative |
 | --- | ---: | ---: | ---: |
-| `fmul` (8192-bit x 8192-bit) | 0.059 ms | 0.043 ms | 0.73x slower |
-| `power` (256-bit base, exponent 100) | 0.179 ms | 0.203 ms | 1.14x faster |
-| `fac` (10000!, exact precision) | 7.588 ms | 8.838 ms | 1.16x faster |
-| `fib` (index 100000, exact precision) | 1.717 ms | 3.736 ms | 2.18x faster |
-| `fib` (index 400000, parallel threshold) | 17.894 ms | 37.100 ms | 2.07x faster |
-| `binomial` (100000 choose 500) | 0.692 ms | 17.088 ms | 24.70x faster |
-| `rf` (10^12+39, 1000) | 1.190 ms | 1380.880 ms | 1160.14x faster |
+| `fmul` (8192-bit x 8192-bit) | 0.072 ms | 0.072 ms | 1.00x faster |
+| `power` (256-bit base, exponent 100) | 0.260 ms | 0.341 ms | 1.31x faster |
+| `fac` (10000!, exact precision) | 7.294 ms | 8.056 ms | 1.10x faster |
+| `fib` (index 100000, exact precision) | 1.569 ms | 3.798 ms | 2.42x faster |
+| `fib` (index 400000, parallel threshold) | 10.075 ms | 33.327 ms | 3.31x faster |
+| `binomial` (100000 choose 500) | 0.650 ms | 16.050 ms | 24.68x faster |
+| `rf` (10^12+39, 1000) | 1.054 ms | 1339.951 ms | 1271.44x faster |
 
 Large balanced products use thresholded Karatsuba multiplication, while small
-and unbalanced products stay on the lower-overhead schoolbook kernel. Power
-and Fibonacci reuse caller-owned scratch space. Factorial batches adjacent
-factors into exact 64-bit products, reducing full accumulator passes.
-Fibonacci evaluates its three independent doubling products in parallel only
-once operands reach 4096 limbs; smaller inputs stay serial.
+and unbalanced products stay on the lower-overhead schoolbook kernel. The
+Python binding uses one caller-owned NumPy workspace per multiplication, power,
+or Fibonacci call and passes non-overlapping regions across the FFI boundary
+without copies. Factorial batches adjacent factors into exact 64-bit products,
+reducing full accumulator passes. Fibonacci uses `max.algorithm.parallelize`
+for its three independent doubling products only once operands reach 4096
+limbs; smaller inputs stay serial.
 
-There is intentionally no GPU path. The hot limb loops are carry-dependent and
-have low arithmetic intensity, so device transfer and launch overhead are not
-justified. CPU remains the only execution device, and no GPU runtime dependency
-is required.
+There is intentionally no GPU path. The effective hot loops are serial
+carry-dependent limb updates with too little independent arithmetic per byte;
+device transfer and launch overhead are not justified for the measured input
+sizes. No GPU allocation or benchmark was performed, and CPU remains the only
+execution device.
 
 Benchmark numbers are machine-specific. Run `pixi run bench` to measure the
 current checkout and machine; the Pixi task holds a machine-wide lock.
@@ -102,9 +105,9 @@ current checkout and machine; the Pixi task holds a machine-wide lock.
 
 Magnitudes cross the C ABI as contiguous little-endian NumPy `uint32` arrays.
 Input arrays are zero-copy views over Python's little-endian byte buffers. The
-Python layer estimates the required output capacity, allocates each result and
-reusable scratch buffer, and passes their addresses as 64-bit integers through
-`ctypes`. Mojo reconstructs
+Python layer estimates the required output capacity, allocates caller-owned
+workspaces, and passes region addresses as 64-bit integers through `ctypes`.
+Mojo reconstructs
 `UnsafePointer[UInt32, AnyOrigin[mut=True]]` values inside non-parametric
 `@export` functions.
 

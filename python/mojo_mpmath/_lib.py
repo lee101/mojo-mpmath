@@ -62,3 +62,11 @@ def addr(value: np.ndarray) -> int:
     ):
         raise TypeError("FFI limbs must be a nonempty contiguous uint32 array")
     return int(value.ctypes.data)
+
+
+def read_addr(value: np.ndarray) -> int:
+    return int(value.ctypes.data)
+
+
+def write_addr(value: np.ndarray) -> int:
+    return ctypes.addressof(ctypes.c_uint32.from_buffer(value))

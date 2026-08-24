@@ -87,6 +87,12 @@ def test_fibonacci_parallel_threshold():
     assert mm.fib(n) == a
 
 
+def test_fibonacci_serial_below_parallel_threshold():
+    n = 100_000
+    expected = exact_mpmath(mpmath.fib, n, bits=int(n * 0.7) + 32)
+    assert mm.fib(n) == expected
+
+
 @pytest.mark.parametrize(
     ("n", "k"),
     [

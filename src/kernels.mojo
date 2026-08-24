@@ -1,12 +1,14 @@
 """Unsigned base-2**32 arithmetic and exact integer special functions."""
 
+from max.algorithm import parallelize
+from std.runtime import initialize_runtime
 from std.sys import simd_width_of
 
 comptime LimbPtr = Pointer[UInt32, AnyOrigin[mut=True]]
 comptime MASK32: UInt64 = 0xFFFFFFFF
 comptime MAX_U64: UInt64 = 0xFFFFFFFFFFFFFFFF
 comptime SIMD_WIDTH = simd_width_of[DType.float64]()
-comptime KARATSUBA_GENERAL_LIMBS = 16
+comptime KARATSUBA_GENERAL_LIMBS = 32
 comptime KARATSUBA_REPEATED_LIMBS = 32
 comptime PARALLEL_FIBONACCI_LIMBS = 4096
 
@@ -561,20 +563,33 @@ def mmp_fibonacci(
         var cn: Int
         var dn: Int
         if max(an, bn) >= PARALLEL_FIBONACCI_LIMBS:
-            _ = multiply_fast[KARATSUBA_REPEATED_LIMBS](
-                a, an, work2, work2_length, c, scratch
-            )
-            _ = multiply_fast[KARATSUBA_REPEATED_LIMBS](
-                a, an, a, an, d, scratch.unsafe_offset(scratch_stride)
-            )
-            _ = multiply_fast[KARATSUBA_REPEATED_LIMBS](
-                b,
-                bn,
-                b,
-                bn,
-                work,
-                scratch.unsafe_offset(scratch_stride + scratch_stride),
-            )
+            initialize_runtime()
+            @__parameter
+            def fibonacci_product(task: Int):
+                if task == 0:
+                    _ = multiply_fast[KARATSUBA_REPEATED_LIMBS](
+                        a, an, work2, work2_length, c, scratch
+                    )
+                elif task == 1:
+                    _ = multiply_fast[KARATSUBA_REPEATED_LIMBS](
+                        a,
+                        an,
+                        a,
+                        an,
+                        d,
+                        scratch.unsafe_offset(scratch_stride),
+                    )
+                else:
+                    _ = multiply_fast[KARATSUBA_REPEATED_LIMBS](
+                        b,
+                        bn,
+                        b,
+                        bn,
+                        work,
+                        scratch.unsafe_offset(scratch_stride + scratch_stride),
+                    )
+
+            parallelize[fibonacci_product](3)
             cn = normalized_length(c, an + work2_length)
             dn = normalized_length(d, an + an)
             work_length = normalized_length(work, bn + bn)

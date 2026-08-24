@@ -6,11 +6,12 @@ from typing import Any
 
 import numpy as np
 
-from ._lib import addr, lib
+from ._lib import addr, lib, read_addr, write_addr
 
 _LOG2_PHI = math.log2((1.0 + math.sqrt(5.0)) / 2.0)
 _LOG2_SQRT5 = 0.5 * math.log2(5.0)
 _MAX_KERNEL_INT = 2**63 - 1
+_LIMB_BYTES = np.dtype(np.uint32).itemsize
 
 
 def _integer(value: Any, name: str = "value") -> int:
@@ -44,11 +45,6 @@ def _value(limbs: np.ndarray, length: int, sign: int = 1) -> int:
 
 def _empty(capacity: int) -> np.ndarray:
     return np.empty(max(1, capacity), dtype=np.uint32)
-
-
-def _scratch(capacity: int, copies: int = 1) -> tuple[np.ndarray, int]:
-    stride = 4 * capacity + 64
-    return _empty(copies * stride), stride
 
 
 def _kernel_int(value: int, name: str) -> int:
@@ -101,19 +97,21 @@ def fmul(x, y, **kwargs):
     b = _integer(y, "y")
     aa = _limbs(a)
     bb = _limbs(b)
-    result = _empty(len(aa) + len(bb))
-    scratch, _ = _scratch(len(result))
+    result_capacity = len(aa) + len(bb)
+    scratch_capacity = 4 * result_capacity + 64
+    workspace = _empty(result_capacity + scratch_capacity)
+    workspace_addr = write_addr(workspace)
     length = lib().mmp_mul_abs(
-        addr(aa),
+        read_addr(aa),
         len(aa),
-        addr(bb),
+        read_addr(bb),
         len(bb),
-        addr(result),
-        len(result),
-        addr(scratch),
-        len(scratch),
+        workspace_addr,
+        result_capacity,
+        workspace_addr + result_capacity * _LIMB_BYTES,
+        scratch_capacity,
     )
-    return _value(result, length, -1 if (a < 0) != (b < 0) else 1)
+    return _value(workspace, length, -1 if (a < 0) != (b < 0) else 1)
 
 
 def power(x, y):
@@ -128,23 +126,22 @@ def power(x, y):
     bits = max(1, abs(base_value).bit_length() * exponent + 1)
     capacity = (bits + 31) // 32 + 1
     base = _limbs(base_value)
-    result = _empty(capacity)
-    current = _empty(capacity)
-    temporary = _empty(capacity)
-    scratch, _ = _scratch(capacity)
+    scratch_capacity = 4 * capacity + 64
+    workspace = _empty(3 * capacity + scratch_capacity)
+    workspace_addr = write_addr(workspace)
     length = lib().mmp_power(
-        addr(base),
+        read_addr(base),
         len(base),
         exponent,
-        addr(result),
-        addr(current),
-        addr(temporary),
+        workspace_addr,
+        workspace_addr + capacity * _LIMB_BYTES,
+        workspace_addr + 2 * capacity * _LIMB_BYTES,
         capacity,
-        addr(scratch),
-        len(scratch),
+        workspace_addr + 3 * capacity * _LIMB_BYTES,
+        scratch_capacity,
     )
     sign = -1 if base_value < 0 and exponent & 1 else 1
-    return _value(result, length, sign)
+    return _value(workspace, length, sign)
 
 
 def fac(x, **kwargs):
@@ -155,7 +152,7 @@ def fac(x, **kwargs):
     _kernel_int(n, "x")
     bits = 1 if n < 2 else math.ceil(math.lgamma(n + 1) / math.log(2.0)) + 2
     result = _empty((bits + 31) // 32 + 1)
-    length = lib().mmp_factorial(n, addr(result), len(result))
+    length = lib().mmp_factorial(n, write_addr(result), len(result))
     return _value(result, length)
 
 
@@ -191,18 +188,20 @@ def fib(x, **kwargs):
         else math.ceil(magnitude * _LOG2_PHI - _LOG2_SQRT5) + 2
     )
     capacity = (bits + 31) // 32 + 2
-    buffers = [_empty(capacity) for _ in range(6)]
-    scratch, scratch_stride = _scratch(capacity, copies=3)
+    scratch_stride = 4 * capacity + 64
+    scratch_capacity = 3 * scratch_stride
+    workspace = _empty(6 * capacity + scratch_capacity)
+    workspace_addr = write_addr(workspace)
     length = lib().mmp_fibonacci(
         magnitude,
-        *(addr(buffer) for buffer in buffers),
+        *(workspace_addr + i * capacity * _LIMB_BYTES for i in range(6)),
         capacity,
-        addr(scratch),
+        workspace_addr + 6 * capacity * _LIMB_BYTES,
         scratch_stride,
-        len(scratch),
+        scratch_capacity,
     )
     sign = -1 if n < 0 and magnitude % 2 == 0 else 1
-    return _value(buffers[0], length, sign)
+    return _value(workspace, length, sign)
 
 
 fibonacci = fib
