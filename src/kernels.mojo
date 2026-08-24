@@ -1,9 +1,8 @@
 """Unsigned base-2**32 arithmetic and exact integer special functions."""
 
-from std.algorithm import parallelize
 from std.sys import simd_width_of
 
-comptime LimbPtr = UnsafePointer[UInt32, AnyOrigin[mut=True]]
+comptime LimbPtr = Pointer[UInt32, AnyOrigin[mut=True]]
 comptime MASK32: UInt64 = 0xFFFFFFFF
 comptime MAX_U64: UInt64 = 0xFFFFFFFFFFFFFFFF
 comptime SIMD_WIDTH = simd_width_of[DType.float64]()
@@ -18,7 +17,7 @@ def limbs(addr: Int) -> LimbPtr:
 
 def normalized_length(value: LimbPtr, length: Int) -> Int:
     var n = max(length, 1)
-    while n > 1 and value[n - 1] == 0:
+    while n > 1 and value[unsafe_offset=n - 1] == 0:
         n -= 1
     return n
 
@@ -26,10 +25,10 @@ def normalized_length(value: LimbPtr, length: Int) -> Int:
 def copy_limbs(source: LimbPtr, destination: LimbPtr, length: Int):
     var i = 0
     while i + SIMD_WIDTH <= length:
-        destination.store(i, source.load[width=SIMD_WIDTH](i))
+        destination.unsafe_store(i, source.unsafe_load[width=SIMD_WIDTH](i))
         i += SIMD_WIDTH
     while i < length:
-        destination[i] = source[i]
+        destination[unsafe_offset=i] = source[unsafe_offset=i]
         i += 1
 
 
@@ -37,10 +36,10 @@ def clear_limbs(destination: LimbPtr, length: Int):
     var zeros = SIMD[DType.uint32, SIMD_WIDTH](0)
     var i = 0
     while i + SIMD_WIDTH <= length:
-        destination.store(i, zeros)
+        destination.unsafe_store(i, zeros)
         i += SIMD_WIDTH
     while i < length:
-        destination[i] = 0
+        destination[unsafe_offset=i] = 0
         i += 1
 
 
@@ -53,26 +52,31 @@ def compare_abs(a: LimbPtr, an_in: Int, b: LimbPtr, bn_in: Int) -> Int:
         return 1
     for offset in range(an):
         var i = an - 1 - offset
-        if a[i] < b[i]:
+        if a[unsafe_offset=i] < b[unsafe_offset=i]:
             return -1
-        if a[i] > b[i]:
+        if a[unsafe_offset=i] > b[unsafe_offset=i]:
             return 1
     return 0
 
 
 def add_abs(
-    a: LimbPtr, an: Int, b: LimbPtr, bn: Int, destination: LimbPtr, capacity: Int
+    a: LimbPtr,
+    an: Int,
+    b: LimbPtr,
+    bn: Int,
+    destination: LimbPtr,
+    capacity: Int,
 ) -> Int:
     var count = max(an, bn)
     var carry = UInt64(0)
     for i in range(count):
-        var av = UInt64(a[i]) if i < an else UInt64(0)
-        var bv = UInt64(b[i]) if i < bn else UInt64(0)
+        var av = UInt64(a[unsafe_offset=i]) if i < an else UInt64(0)
+        var bv = UInt64(b[unsafe_offset=i]) if i < bn else UInt64(0)
         var total = av + bv + carry
-        destination[i] = UInt32(total & MASK32)
+        destination[unsafe_offset=i] = UInt32(total & MASK32)
         carry = total >> 32
     if carry != 0 and count < capacity:
-        destination[count] = UInt32(carry)
+        destination[unsafe_offset=count] = UInt32(carry)
         count += 1
     return normalized_length(destination, count)
 
@@ -82,13 +86,13 @@ def sub_abs(
 ) -> Int:
     var borrow = UInt64(0)
     for i in range(an):
-        var av = UInt64(a[i])
-        var bv = (UInt64(b[i]) if i < bn else UInt64(0)) + borrow
+        var av = UInt64(a[unsafe_offset=i])
+        var bv = (UInt64(b[unsafe_offset=i]) if i < bn else UInt64(0)) + borrow
         if av >= bv:
-            destination[i] = UInt32(av - bv)
+            destination[unsafe_offset=i] = UInt32(av - bv)
             borrow = 0
         else:
-            destination[i] = UInt32((UInt64(1) << 32) + av - bv)
+            destination[unsafe_offset=i] = UInt32((UInt64(1) << 32) + av - bv)
             borrow = 1
     return normalized_length(destination, an)
 
@@ -104,33 +108,33 @@ def multiply_abs(
     clear_limbs(destination, count)
     for i in range(an):
         var carry = UInt64(0)
-        var limb = UInt64(a[i])
+        var limb = UInt64(a[unsafe_offset=i])
         var j = 0
         while j + 1 < bn:
             var total = (
-                UInt64(destination[i + j])
-                + limb * UInt64(b[j])
+                UInt64(destination[unsafe_offset=i + j])
+                + limb * UInt64(b[unsafe_offset=j])
                 + carry
             )
-            destination[i + j] = UInt32(total & MASK32)
+            destination[unsafe_offset=i + j] = UInt32(total & MASK32)
             carry = total >> 32
             total = (
-                UInt64(destination[i + j + 1])
-                + limb * UInt64(b[j + 1])
+                UInt64(destination[unsafe_offset=i + j + 1])
+                + limb * UInt64(b[unsafe_offset=j + 1])
                 + carry
             )
-            destination[i + j + 1] = UInt32(total & MASK32)
+            destination[unsafe_offset=i + j + 1] = UInt32(total & MASK32)
             carry = total >> 32
             j += 2
         if j < bn:
             var total = (
-                UInt64(destination[i + j])
-                + limb * UInt64(b[j])
+                UInt64(destination[unsafe_offset=i + j])
+                + limb * UInt64(b[unsafe_offset=j])
                 + carry
             )
-            destination[i + j] = UInt32(total & MASK32)
+            destination[unsafe_offset=i + j] = UInt32(total & MASK32)
             carry = total >> 32
-        destination[i + bn] = UInt32(carry)
+        destination[unsafe_offset=i + bn] = UInt32(carry)
     return normalized_length(destination, count)
 
 
@@ -144,19 +148,23 @@ def add_shifted_in_place(
     var carry = UInt64(0)
     for i in range(value_length):
         var total = (
-            UInt64(destination[shift + i]) + UInt64(value[i]) + carry
+            UInt64(destination[unsafe_offset=shift + i])
+            + UInt64(value[unsafe_offset=i])
+            + carry
         )
-        destination[shift + i] = UInt32(total & MASK32)
+        destination[unsafe_offset=shift + i] = UInt32(total & MASK32)
         carry = total >> 32
     var i = shift + value_length
     while carry != 0 and i < destination_length:
-        var total = UInt64(destination[i]) + carry
-        destination[i] = UInt32(total & MASK32)
+        var total = UInt64(destination[unsafe_offset=i]) + carry
+        destination[unsafe_offset=i] = UInt32(total & MASK32)
         carry = total >> 32
         i += 1
 
 
-def multiply_fast[karatsuba_limbs: Int](
+def multiply_fast[
+    karatsuba_limbs: Int
+](
     a: LimbPtr,
     an: Int,
     b: LimbPtr,
@@ -179,10 +187,10 @@ def multiply_fast[karatsuba_limbs: Int](
 
     var sum_capacity = half + 1
     var sum_a = scratch
-    var sum_b = scratch + sum_capacity
-    var middle = scratch + sum_capacity + sum_capacity
+    var sum_b = scratch.unsafe_offset(sum_capacity)
+    var middle = scratch.unsafe_offset(sum_capacity + sum_capacity)
     var middle_capacity = sum_capacity + sum_capacity
-    var child_scratch = middle + middle_capacity
+    var child_scratch = middle.unsafe_offset(middle_capacity)
 
     var count = an + bn
     clear_limbs(destination, count)
@@ -195,17 +203,17 @@ def multiply_fast[karatsuba_limbs: Int](
         child_scratch,
     )
     var high_length = multiply_fast[karatsuba_limbs](
-        a + a_low_length,
+        a.unsafe_offset(a_low_length),
         a_high_length,
-        b + b_low_length,
+        b.unsafe_offset(b_low_length),
         b_high_length,
-        destination + half + half,
+        destination.unsafe_offset(half + half),
         child_scratch,
     )
     var sum_a_length = add_abs(
         a,
         a_low_length,
-        a + a_low_length,
+        a.unsafe_offset(a_low_length),
         a_high_length,
         sum_a,
         sum_capacity,
@@ -213,7 +221,7 @@ def multiply_fast[karatsuba_limbs: Int](
     var sum_b_length = add_abs(
         b,
         b_low_length,
-        b + b_low_length,
+        b.unsafe_offset(b_low_length),
         b_high_length,
         sum_b,
         sum_capacity,
@@ -232,13 +240,11 @@ def multiply_fast[karatsuba_limbs: Int](
     middle_length = sub_abs(
         middle,
         middle_length,
-        destination + half + half,
+        destination.unsafe_offset(half + half),
         high_length,
         middle,
     )
-    add_shifted_in_place(
-        destination, count, middle, middle_length, half
-    )
+    add_shifted_in_place(destination, count, middle, middle_length, half)
     return normalized_length(destination, count)
 
 
@@ -246,16 +252,16 @@ def multiply_u64_in_place(
     value: LimbPtr, length: Int, factor: UInt64, capacity: Int
 ) -> Int:
     if factor == 0:
-        value[0] = 0
+        value[unsafe_offset=0] = 0
         return 1
     var carry = UInt64(0)
     var factor_low = factor & MASK32
     var factor_high = factor >> 32
     for i in range(length):
-        var limb = UInt64(value[i])
+        var limb = UInt64(value[unsafe_offset=i])
         var product_low = limb * factor_low
         var low_sum = (product_low & MASK32) + (carry & MASK32)
-        value[i] = UInt32(low_sum & MASK32)
+        value[unsafe_offset=i] = UInt32(low_sum & MASK32)
         carry = (
             (product_low >> 32)
             + (carry >> 32)
@@ -264,7 +270,7 @@ def multiply_u64_in_place(
         )
     var count = length
     while carry != 0 and count < capacity:
-        value[count] = UInt32(carry & MASK32)
+        value[unsafe_offset=count] = UInt32(carry & MASK32)
         carry >>= 32
         count += 1
     if carry != 0:
@@ -276,8 +282,8 @@ def divide_small_in_place(value: LimbPtr, length: Int, divisor: UInt64) -> Int:
     var remainder = UInt64(0)
     for offset in range(length):
         var i = length - 1 - offset
-        var current = (remainder << 32) | UInt64(value[i])
-        value[i] = UInt32(current // divisor)
+        var current = (remainder << 32) | UInt64(value[unsafe_offset=i])
+        value[unsafe_offset=i] = UInt32(current // divisor)
         remainder = current % divisor
     return normalized_length(value, length)
 
@@ -396,7 +402,7 @@ def mmp_power(
     var current = limbs(current_addr)
     var temporary = limbs(temporary_addr)
     var scratch = limbs(scratch_addr)
-    result[0] = 1
+    result[unsafe_offset=0] = 1
     var result_length = 1
     copy_limbs(base, current, base_length)
     var current_length = base_length
@@ -433,7 +439,7 @@ def mmp_factorial(n: Int, destination_addr: Int, capacity: Int) abi("C") -> Int:
     if n < 0 or destination_addr == 0 or capacity <= 0:
         return -1
     var destination = limbs(destination_addr)
-    destination[0] = 1
+    destination[unsafe_offset=0] = 1
     var length = 1
     var factor = 2
     while factor <= n:
@@ -459,16 +465,20 @@ def mmp_stride_product(
         count < 0
         or destination_addr == 0
         or capacity <= 0
-        or (count > 0 and stride != 0 and (first + (count - 1) * stride - first) // stride != count - 1)
+        or (
+            count > 0
+            and stride != 0
+            and (first + (count - 1) * stride - first) // stride != count - 1
+        )
     ):
         return -1
     var destination = limbs(destination_addr)
-    destination[0] = 1
+    destination[unsafe_offset=0] = 1
     var length = 1
     for i in range(count):
         var factor = first + i * stride
         if factor == 0:
-            destination[0] = 0
+            destination[unsafe_offset=0] = 0
             return 1
         var magnitude = -factor if factor < 0 else factor
         length = multiply_u64_in_place(
@@ -486,7 +496,7 @@ def mmp_binomial(
     if n < 0 or k < 0 or k > n or destination_addr == 0 or capacity <= 0:
         return -1
     var destination = limbs(destination_addr)
-    destination[0] = 1
+    destination[unsafe_offset=0] = 1
     var length = 1
     var reduced_k = min(k, n - k)
     for i in range(1, reduced_k + 1):
@@ -534,8 +544,8 @@ def mmp_fibonacci(
     var work = limbs(work_addr)
     var work2 = limbs(work2_addr)
     var scratch = limbs(scratch_addr)
-    a[0] = 0
-    b[0] = 1
+    a[unsafe_offset=0] = 0
+    b[unsafe_offset=0] = 1
     var an = 1
     var bn = 1
     var started = False
@@ -551,28 +561,20 @@ def mmp_fibonacci(
         var cn: Int
         var dn: Int
         if max(an, bn) >= PARALLEL_FIBONACCI_LIMBS:
-
-            @parameter
-            def multiply_part(task: Int):
-                if task == 0:
-                    _ = multiply_fast[KARATSUBA_REPEATED_LIMBS](
-                        a, an, work2, work2_length, c, scratch
-                    )
-                elif task == 1:
-                    _ = multiply_fast[KARATSUBA_REPEATED_LIMBS](
-                        a, an, a, an, d, scratch + scratch_stride
-                    )
-                else:
-                    _ = multiply_fast[KARATSUBA_REPEATED_LIMBS](
-                        b,
-                        bn,
-                        b,
-                        bn,
-                        work,
-                        scratch + scratch_stride + scratch_stride,
-                    )
-
-            parallelize[multiply_part](3, 3)
+            _ = multiply_fast[KARATSUBA_REPEATED_LIMBS](
+                a, an, work2, work2_length, c, scratch
+            )
+            _ = multiply_fast[KARATSUBA_REPEATED_LIMBS](
+                a, an, a, an, d, scratch.unsafe_offset(scratch_stride)
+            )
+            _ = multiply_fast[KARATSUBA_REPEATED_LIMBS](
+                b,
+                bn,
+                b,
+                bn,
+                work,
+                scratch.unsafe_offset(scratch_stride + scratch_stride),
+            )
             cn = normalized_length(c, an + work2_length)
             dn = normalized_length(d, an + an)
             work_length = normalized_length(work, bn + bn)
