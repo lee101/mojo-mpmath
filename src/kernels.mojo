@@ -1,7 +1,5 @@
 """Unsigned base-2**32 arithmetic and exact integer special functions."""
 
-from max.algorithm import parallelize
-from std.runtime import initialize_runtime
 from std.sys import simd_width_of
 
 comptime LimbPtr = Pointer[UInt32, AnyOrigin[mut=True]]
@@ -10,7 +8,6 @@ comptime MAX_U64: UInt64 = 0xFFFFFFFFFFFFFFFF
 comptime SIMD_WIDTH = simd_width_of[DType.float64]()
 comptime KARATSUBA_GENERAL_LIMBS = 32
 comptime KARATSUBA_REPEATED_LIMBS = 32
-comptime PARALLEL_FIBONACCI_LIMBS = 4096
 
 
 def limbs(addr: Int) -> LimbPtr:
@@ -560,49 +557,15 @@ def mmp_fibonacci(
 
         var work_length = add_abs(b, bn, b, bn, work, capacity)
         var work2_length = sub_abs(work, work_length, a, an, work2)
-        var cn: Int
-        var dn: Int
-        if max(an, bn) >= PARALLEL_FIBONACCI_LIMBS:
-            initialize_runtime()
-            @__parameter
-            def fibonacci_product(task: Int):
-                if task == 0:
-                    _ = multiply_fast[KARATSUBA_REPEATED_LIMBS](
-                        a, an, work2, work2_length, c, scratch
-                    )
-                elif task == 1:
-                    _ = multiply_fast[KARATSUBA_REPEATED_LIMBS](
-                        a,
-                        an,
-                        a,
-                        an,
-                        d,
-                        scratch.unsafe_offset(scratch_stride),
-                    )
-                else:
-                    _ = multiply_fast[KARATSUBA_REPEATED_LIMBS](
-                        b,
-                        bn,
-                        b,
-                        bn,
-                        work,
-                        scratch.unsafe_offset(scratch_stride + scratch_stride),
-                    )
-
-            parallelize[fibonacci_product](3)
-            cn = normalized_length(c, an + work2_length)
-            dn = normalized_length(d, an + an)
-            work_length = normalized_length(work, bn + bn)
-        else:
-            cn = multiply_fast[KARATSUBA_REPEATED_LIMBS](
-                a, an, work2, work2_length, c, scratch
-            )
-            dn = multiply_fast[KARATSUBA_REPEATED_LIMBS](
-                a, an, a, an, d, scratch
-            )
-            work_length = multiply_fast[KARATSUBA_REPEATED_LIMBS](
-                b, bn, b, bn, work, scratch
-            )
+        var cn = multiply_fast[KARATSUBA_REPEATED_LIMBS](
+            a, an, work2, work2_length, c, scratch
+        )
+        var dn = multiply_fast[KARATSUBA_REPEATED_LIMBS](
+            a, an, a, an, d, scratch
+        )
+        work_length = multiply_fast[KARATSUBA_REPEATED_LIMBS](
+            b, bn, b, bn, work, scratch
+        )
         dn = add_abs(d, dn, work, work_length, work2, capacity)
         copy_limbs(work2, d, dn)
 
